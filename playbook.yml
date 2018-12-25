@@ -1,0 +1,161 @@
+---
+- hosts: all
+  remote_user:  ubuntu
+  become:       true
+  become_user:  root
+  become_method: sudo
+
+  tasks:
+  - name:  Set hostname
+    hostname:
+      name:  "{{ HOSTNAME }}"
+
+  - name:  Install base packages
+    apt:
+      name:  "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+        - glances
+        - zsh
+
+  ##
+  # Blog about this, installing Percona Server 8.0
+  - name:  Install percona-release
+    apt:
+      deb:  "https://repo.percona.com/apt/percona-release_latest.{{ ansible_distribution_release }}_all.deb"
+
+  - name:  Run percona-release to setup Percona Server 8.0
+    command:  percona-release setup ps80
+    args:
+      creates:  /etc/apt/sources.list.d/percona-ps-80-release.list
+
+  - name:  Install Percona Server 8.0
+    apt:
+      name:  percona-server-server
+      state: present
+  #
+  ##
+
+  - name:  Install required packages for WordPress
+    apt:
+      name:  "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+        - libperconaserverclient21-dev
+        - apache2
+        - libapache2-mod-php7.2
+        - php7.2
+        - php7.2-fpm
+        - php7.2-mysql
+        - python-mysqldb
+
+  ##
+  # Website configuration files
+  - name:  Install website configuration files
+    copy:
+      src:  "{{ item }}"
+      dest: "/etc/apache2/sites-available/{{ item }}"
+    with_items:
+      - 000-default.conf
+      - 000-default-le-ssl.conf
+    notify:
+      - restart apache2
+
+  - name: Add LetsEncrypt Certbot PPA
+    apt_repository:
+      repo: ppa:certbot/certbot
+
+  - name:  Install python-certbot-apache
+    apt:
+      name:  python-certbot-apache
+      state: present
+      update_cache: true
+
+  - name:  Create certificate
+    command:  "certbot --apache --agree-tos --email {{ LE_EMAIL }} -n -d {{ HOSTNAME }}"
+
+  - name:  Retrieve WordPress
+    unarchive:
+      remote_src: yes
+      src:  https://wordpress.org/wordpress-5.0.2.tar.gz
+      dest:  /usr/local/src
+
+  - name:  Install WordPress
+    command:  "cp -R /usr/local/src/wordpress {{ BLOG_ROOT }}"
+    args:
+      creates:  "{{ BLOG_ROOT }}"
+
+  - name:  .htaccess installation
+    copy:
+      src:  htaccess
+      dest: "{{ BLOG_ROOT }}/.htaccess"
+
+  - name:  WordPress installation permissions
+    file:
+      path:    "{{ BLOG_ROOT }}"
+      owner:   www-data
+      recurse: yes
+
+  - mysql_db:
+      name: wordpress
+      state: present
+
+  - mysql_user:
+      name: wordpress
+      state: present
+
+
+# This is broken at the moment
+# https://github.com/ansible/ansible/pull/40092
+#  - mysql_user:
+#      name: wordpress
+#      password: '{{ WORDPRESS_USER_DB_PASSWORD }}'
+#      priv: wordpress.*:ALL
+#      state: present
+
+  # So we use this method instead
+  # Mode is set to only allow root-read as passwords
+  # are contained within.
+  - name: Copy script to create MySQL privileges
+    template:
+      src:  setup_wordpress_mysql_user.sh.j2
+      dest: /usr/local/bin
+      mode: 0700
+
+  - name:    Setup Wordpress MySQL User
+    command:  /usr/local/bin/setup_wordpress_mysql_user.sh
+    args:
+      creates:  /root/.wordpress_mysql_user_created
+
+  - name:  Remove Wordpress MySQL User setup script
+    file:
+      path:  /usr/local/bin/setup_wordpress_mysql_user.sh
+      state: absent
+
+  - name:  Install WordPress configuration
+    template:
+      src:  wp-config.php.j2
+      dest: "{{ BLOG_ROOT }}/wp-config.php"
+
+  - name:  Enable required Apache2 modules
+    apache2_module:
+      name:  "{{ item }}"
+      state: present
+    with_items:
+      - rewrite
+      - ssl
+    notify:
+      - restart apache2
+
+  handlers:
+  - name:  restart apache2
+    service:
+      name:  apache2
+      state: restarted
+
+
+

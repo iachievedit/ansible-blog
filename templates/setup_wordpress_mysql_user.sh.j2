@@ -1,0 +1,11 @@
+#!/bin/bash
+# Ansible generated - local edits may be discarded
+# NOTE: This script is currently oblivious to errors and
+#       will not return proper error codes to its caller.
+
+mysql -e "GRANT USAGE ON wordpress.* TO 'wordpress'@'localhost' IDENTIFIED BY '{{ WORDPRESS_USER_DB_PASSWORD }}';"
+mysql -e "GRANT ALL PRIVILEGES ON wordpress.* TO 'wordpress'@'localhost';"
+
+# See playbook.yml
+# creates:  /root/.wordpress_mysql_user_created
+echo "WARNING:  Removing this file may trigger Ansible tasks to run again." > /root/.wordpress_mysql_user_created
